@@ -1,0 +1,9 @@
+filename,time_h,total,germinated
+sample_000_00h.png,0,10,0
+sample_001_06h.png,6,10,1
+sample_002_12h.png,12,10,3
+sample_003_18h.png,18,10,5
+sample_004_24h.png,24,10,7
+sample_005_30h.png,30,10,8
+sample_006_36h.png,36,10,9
+sample_007_42h.png,42,10,9

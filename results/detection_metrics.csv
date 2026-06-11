@@ -1,0 +1,2 @@
+weights,data,split,imgsz,precision,recall,mAP50,mAP50_95
+/mnt/data/home/wmy/paper1/seed_germ_train/runs/seed_yolov8s_zm_full/weights/best.pt,/mnt/data/home/wmy/paper1/seed_germ_train/yolo_seed_zm/seed_germination.yaml,test,640,0.9438385955823487,0.922000939349722,0.9670082686395722,0.8923358645174562

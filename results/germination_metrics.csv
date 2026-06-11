@@ -1,0 +1,2 @@
+weights,dataset,split,conf,iou,num_images,germinated_count_MAE,germinated_count_RMSE,germination_rate_MAE,germination_rate_RMSE,total_count_MAE
+/mnt/data/home/wmy/paper1/seed_germ_train/runs/seed_yolov8s_zm_full/weights/best.pt,/mnt/data/home/wmy/paper1/seed_germ_train/yolo_seed_zm,test,0.25,0.5,1164,0.4896907216494845,0.8890320617800306,0.04866703313868262,0.08673047899808774,0.2345360824742268

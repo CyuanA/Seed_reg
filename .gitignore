@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+.streamlit/
+streamlit*.log
+
+# Local downloads and training workspaces
+data/public_dataset/
+external/
+runs/detect/
+yolov8*.pt
+mendeley_page.html
+mendeley_bundle.js
+
+# Keep the final demo model, exclude duplicate or scratch weights.
+runs/**/*.pt
+models/*.pth
+!models/seed_detector.pt
+
+# OS/editor files
+.DS_Store
+Thumbs.db
