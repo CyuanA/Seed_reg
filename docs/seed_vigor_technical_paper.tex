@@ -213,18 +213,18 @@ x_c=\frac{x+w/2}{W},\quad y_c=\frac{y+h/2}{H},\quad b_w=\frac{w}{W},\quad b_h=\f
 系统采用单页 Streamlit 应用实现，核心目录结构如下：
 \begin{lstlisting}
 seed_germination_demo/
-├── app.py
-├── models/seed_detector.pt
-├── results/
-│   ├── detection_metrics.csv
-│   ├── germination_metrics.csv
-│   └── t50_summary.csv
-├── src/
-│   ├── detector.py
-│   ├── yolo_detector.py
-│   ├── reporting.py
-│   └── vigor.py
-└── scripts/
+|-- app.py
+|-- models/seed_detector.pt
+|-- results/
+|   |-- detection_metrics.csv
+|   |-- germination_metrics.csv
+|   `-- t50_summary.csv
+|-- src/
+|   |-- detector.py
+|   |-- yolo_detector.py
+|   |-- reporting.py
+|   `-- vigor.py
+`-- scripts/
 \end{lstlisting}
 
 其中 \texttt{src/yolo\_detector.py} 负责模型推理，\texttt{src/vigor.py} 负责 T50、平均发芽时间、发芽速度指数、整齐度和活力评分计算，\texttt{app.py} 负责交互界面、摄像头采集、人工校正、批次对比和报告导出。
