@@ -7,9 +7,11 @@ SeedGerm-Vigor is a Streamlit system for automatic seed germination counting, ti
 - YOLO-based seed detection with germinated / non-germinated counting.
 - Single-image analysis for uploaded petri-dish images.
 - Local camera capture for quick on-device inspection.
+- Timed USB-camera monitoring with automatic trend updates.
 - Time-series germination curve reconstruction.
 - Final germination rate, T50, mean germination time, germination speed index, uniformity score, and vigor score.
 - Multi-batch comparison for seed lots or treatments.
+- Manual correction of detection results and YOLO-format retraining data export.
 - Exportable experiment report package with CSV, Markdown, and Word outputs.
 - Real evaluation result display from the trained detector.
 - OpenCV rule-based baseline for fallback demonstration.

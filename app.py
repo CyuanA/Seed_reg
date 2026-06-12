@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import io
+import json
 import re
+import time
 import zipfile
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+import cv2
 import pandas as pd
 import streamlit as st
 from PIL import Image
 
-from src.detector import ImageAnalysis, analyze_image, annotate_detections
+from src.detector import Detection, ImageAnalysis, analyze_image, annotate_detections
 from src.reporting import build_summary_table, load_sample_metadata, sequence_rows_from_uploads
 from src.vigor import compute_vigor_metrics, score_vigor
 
@@ -23,13 +26,10 @@ RESULTS_DIR = ROOT / "results"
 TRAINING_RESULTS = ROOT / "runs" / "seed_yolov8s_zm_full" / "results.csv"
 SAMPLE_DIR = ROOT / "data" / "sample_sequence"
 SAMPLE_META = SAMPLE_DIR / "metadata.csv"
+CAPTURE_DIR = ROOT / "captures"
 
 
-st.set_page_config(
-    page_title="SeedGerm-Vigor",
-    page_icon="🌱",
-    layout="wide",
-)
+st.set_page_config(page_title="SeedGerm-Vigor", page_icon="🌱", layout="wide")
 
 
 def inject_theme() -> None:
@@ -39,215 +39,70 @@ def inject_theme() -> None:
         :root {
             --bg: #f7f8f4;
             --panel: #ffffff;
-            --panel-soft: #f1f5ef;
             --border: #d9e2d8;
             --text: #1f2933;
             --muted: #61706b;
             --accent: #16846f;
             --accent-dark: #0e5f51;
-            --amber: #b7791f;
-            --blue: #2f6f9f;
         }
-
-        .stApp {
-            background: var(--bg);
-            color: var(--text);
-        }
-
-        .main .block-container {
-            max-width: 1280px;
-            padding-top: 1.5rem;
-            padding-bottom: 2.5rem;
-        }
-
-        [data-testid="stSidebar"] {
-            background: #eef3ec;
-            border-right: 1px solid var(--border);
-        }
-
-        [data-testid="stSidebar"] h3 {
-            color: var(--accent-dark);
-            font-size: 0.95rem;
-            margin-top: 0.35rem;
-        }
-
+        .stApp { background: var(--bg); color: var(--text); }
+        .main .block-container { max-width: 1280px; padding-top: 1.4rem; padding-bottom: 2.5rem; }
+        [data-testid="stSidebar"] { background: #eef3ec; border-right: 1px solid var(--border); }
+        [data-testid="stSidebar"] h3 { color: var(--accent-dark); font-size: 0.95rem; }
         .app-header {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) 340px;
-            gap: 1rem;
-            align-items: stretch;
-            margin-bottom: 1.15rem;
+            display: grid; grid-template-columns: minmax(0, 1fr) 360px;
+            gap: 1rem; align-items: stretch; margin-bottom: 1.1rem;
         }
-
-        .title-panel {
-            padding: 0.25rem 0 0.35rem;
-        }
-
-        .eyebrow {
-            color: var(--accent);
-            font-size: 0.78rem;
-            font-weight: 700;
-            letter-spacing: 0;
-            margin-bottom: 0.25rem;
-            text-transform: uppercase;
-        }
-
         .title-panel h1 {
-            color: var(--text);
-            font-size: clamp(1.75rem, 2.5vw, 2.45rem);
-            line-height: 1.15;
-            margin: 0;
-            letter-spacing: 0;
+            color: var(--text); font-size: clamp(1.75rem, 2.5vw, 2.45rem);
+            line-height: 1.15; margin: 0; letter-spacing: 0;
         }
-
         .title-panel p {
-            color: var(--muted);
-            font-size: 0.98rem;
-            line-height: 1.55;
-            margin: 0.55rem 0 0;
-            max-width: 760px;
+            color: var(--muted); font-size: 0.98rem; line-height: 1.55;
+            margin: 0.55rem 0 0; max-width: 780px;
         }
-
+        .eyebrow {
+            color: var(--accent); font-size: 0.78rem; font-weight: 700;
+            letter-spacing: 0; margin-bottom: 0.25rem; text-transform: uppercase;
+        }
         .status-panel {
-            background: var(--panel);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 0.95rem 1rem;
-            box-shadow: 0 8px 22px rgba(31, 41, 51, 0.05);
+            background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+            padding: 0.95rem 1rem; box-shadow: 0 8px 22px rgba(31, 41, 51, 0.05);
         }
-
         .status-row {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 0.75rem;
-            border-bottom: 1px solid #edf1eb;
-            padding: 0.45rem 0;
+            display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+            border-bottom: 1px solid #edf1eb; padding: 0.45rem 0;
         }
-
-        .status-row:first-child {
-            padding-top: 0;
-        }
-
-        .status-row:last-child {
-            border-bottom: 0;
-            padding-bottom: 0;
-        }
-
-        .status-label {
-            color: var(--muted);
-            font-size: 0.8rem;
-        }
-
-        .status-value {
-            color: var(--text);
-            font-size: 0.86rem;
-            font-weight: 700;
-            text-align: right;
-        }
-
+        .status-row:first-child { padding-top: 0; }
+        .status-row:last-child { border-bottom: 0; padding-bottom: 0; }
+        .status-label { color: var(--muted); font-size: 0.8rem; }
+        .status-value { color: var(--text); font-size: 0.86rem; font-weight: 700; text-align: right; }
         .mode-chip {
-            display: inline-flex;
-            align-items: center;
-            border-radius: 999px;
-            border: 1px solid #b9d6cd;
-            background: #e8f5f0;
-            color: var(--accent-dark);
-            font-size: 0.78rem;
-            font-weight: 700;
-            padding: 0.18rem 0.55rem;
+            display: inline-flex; align-items: center; border-radius: 999px;
+            border: 1px solid #b9d6cd; background: #e8f5f0; color: var(--accent-dark);
+            font-size: 0.78rem; font-weight: 700; padding: 0.18rem 0.55rem;
         }
-
-        h2, h3 {
-            color: var(--text);
-            letter-spacing: 0;
-        }
-
-        h2 {
-            font-size: 1.22rem !important;
-            margin-top: 1.2rem !important;
-            padding-bottom: 0.35rem;
-            border-bottom: 1px solid var(--border);
-        }
-
-        h3 {
-            font-size: 1.02rem !important;
-        }
-
+        h2 { font-size: 1.22rem !important; margin-top: 1.2rem !important;
+             padding-bottom: 0.35rem; border-bottom: 1px solid var(--border); }
+        h3 { font-size: 1.02rem !important; }
         [data-testid="stMetric"] {
-            background: var(--panel);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 0.85rem 0.95rem;
-            box-shadow: 0 6px 18px rgba(31, 41, 51, 0.04);
+            background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+            padding: 0.85rem 0.95rem; box-shadow: 0 6px 18px rgba(31, 41, 51, 0.04);
         }
-
-        [data-testid="stMetricLabel"] p {
-            color: var(--muted);
-            font-size: 0.78rem;
-        }
-
-        [data-testid="stMetricValue"] {
-            color: var(--text);
-            font-size: 1.45rem;
-        }
-
-        .stDataFrame {
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            overflow: hidden;
-        }
-
-        div[data-testid="stAlert"] {
-            border-radius: 8px;
-            border: 1px solid #cbded5;
-            background: #eef7f2;
-            color: var(--text);
-        }
-
+        [data-testid="stMetricLabel"] p { color: var(--muted); font-size: 0.78rem; }
+        [data-testid="stMetricValue"] { color: var(--text); font-size: 1.45rem; }
+        .stDataFrame { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
         div[data-testid="stFileUploader"] {
-            background: var(--panel);
-            border: 1px dashed #aac4ba;
-            border-radius: 8px;
-            padding: 0.3rem 0.8rem;
+            background: var(--panel); border: 1px dashed #aac4ba; border-radius: 8px; padding: 0.3rem 0.8rem;
         }
-
-        div.stButton > button,
-        div.stDownloadButton > button {
-            border-radius: 8px;
-            border: 1px solid var(--accent);
-            background: var(--accent);
-            color: #ffffff;
-            font-weight: 700;
-            min-height: 2.55rem;
+        div.stButton > button, div.stDownloadButton > button {
+            border-radius: 8px; border: 1px solid var(--accent); background: var(--accent);
+            color: #ffffff; font-weight: 700; min-height: 2.55rem;
         }
-
-        div.stButton > button:hover,
-        div.stDownloadButton > button:hover {
-            border-color: var(--accent-dark);
-            background: var(--accent-dark);
-            color: #ffffff;
+        div.stButton > button:hover, div.stDownloadButton > button:hover {
+            border-color: var(--accent-dark); background: var(--accent-dark); color: #ffffff;
         }
-
-        .stTabs [data-baseweb="tab-list"] {
-            gap: 0.35rem;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .stTabs [data-baseweb="tab"] {
-            border-radius: 8px 8px 0 0;
-            padding: 0.45rem 0.8rem;
-        }
-
-        @media (max-width: 900px) {
-            .app-header {
-                grid-template-columns: 1fr;
-            }
-
-            .status-panel {
-                padding: 0.75rem 0.85rem;
-            }
-        }
+        @media (max-width: 900px) { .app-header { grid-template-columns: 1fr; } }
         </style>
         """,
         unsafe_allow_html=True,
@@ -260,22 +115,13 @@ def render_app_header(model_status: str, analyzer_name: str, mode: str) -> None:
         <div class="app-header">
           <div class="title-panel">
             <div class="eyebrow">SeedGerm-Vigor</div>
-            <h1>种子发芽活力视觉分析工作台</h1>
-            <p>面向培养皿图像和时序实验的自动计数、发芽率统计、T50 估计、批次对比与报告导出。</p>
+            <h1>种子活力视觉表型监测与自动评价系统</h1>
+            <p>面向培养皿图像和农业发芽实验，提供低成本图像采集、种子检测、时序趋势分析、人工校正闭环和实验报告输出。</p>
           </div>
           <div class="status-panel">
-            <div class="status-row">
-              <span class="status-label">模型状态</span>
-              <span class="status-value">{model_status}</span>
-            </div>
-            <div class="status-row">
-              <span class="status-label">推理模式</span>
-              <span class="status-value">{analyzer_name}</span>
-            </div>
-            <div class="status-row">
-              <span class="status-label">当前任务</span>
-              <span class="mode-chip">{mode}</span>
-            </div>
+            <div class="status-row"><span class="status-label">模型状态</span><span class="status-value">{model_status}</span></div>
+            <div class="status-row"><span class="status-label">推理模式</span><span class="status-value">{analyzer_name}</span></div>
+            <div class="status-row"><span class="status-label">当前任务</span><span class="mode-chip">{mode}</span></div>
           </div>
         </div>
         """,
@@ -314,6 +160,26 @@ def get_analyzer(detector_choice: str, conf: float, iou: float) -> tuple[Callabl
     return analyze_image, "OpenCV rule-based baseline"
 
 
+def postprocess_analysis(
+    analysis: ImageAnalysis,
+    conservative_germination: bool,
+    germination_conf_threshold: float,
+    germination_aspect_threshold: float,
+) -> ImageAnalysis:
+    if not conservative_germination:
+        return analysis
+
+    detections = []
+    for detection in analysis.detections:
+        if detection.label != "germinated":
+            detections.append(detection)
+            continue
+        high_confidence = detection.confidence >= germination_conf_threshold
+        elongated_shape = detection.aspect_ratio >= germination_aspect_threshold
+        detections.append(detection if high_confidence or elongated_shape else replace(detection, label="non_germinated"))
+    return ImageAnalysis(detections=detections)
+
+
 def show_single_image_analysis(
     image: Image.Image,
     caption: str,
@@ -333,14 +199,12 @@ def show_single_image_analysis(
         c3.metric("已发芽", result.germinated)
         c4.metric("未发芽", result.non_germinated)
         st.dataframe(result.to_dataframe(), hide_index=True, use_container_width=True)
-
     return result
 
 
 def render_vigor_summary(summary: pd.DataFrame) -> None:
     metrics = compute_vigor_metrics(summary)
     vigor_score = score_vigor(metrics)
-
     top = st.columns(4)
     top[0].metric("最终发芽率", f"{metrics.final_germination_rate:.1f}%")
     top[1].metric("T50", "未达到" if metrics.t50_h is None else f"{metrics.t50_h:.1f} h")
@@ -357,36 +221,10 @@ def pretty_frame(frame: pd.DataFrame, columns: dict[str, str]) -> pd.DataFrame:
     return frame[visible].rename(columns=columns)
 
 
-def postprocess_analysis(
-    analysis: ImageAnalysis,
-    conservative_germination: bool,
-    germination_conf_threshold: float,
-    germination_aspect_threshold: float,
-) -> ImageAnalysis:
-    if not conservative_germination:
-        return analysis
-
-    detections = []
-    for detection in analysis.detections:
-        if detection.label != "germinated":
-            detections.append(detection)
-            continue
-
-        high_confidence = detection.confidence >= germination_conf_threshold
-        elongated_shape = detection.aspect_ratio >= germination_aspect_threshold
-        if high_confidence or elongated_shape:
-            detections.append(detection)
-        else:
-            detections.append(replace(detection, label="non_germinated"))
-
-    return ImageAnalysis(detections=detections)
-
-
 def parse_batch_upload_name(name: str) -> tuple[str, float | None]:
     normalized = name.replace("\\", "/")
     parts = [part for part in normalized.split("/") if part]
     stem = Path(parts[-1]).stem if parts else Path(name).stem
-
     time_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:h|hr|hour|hours|小时)", stem, flags=re.IGNORECASE)
     time_h = float(time_match.group(1)) if time_match else None
 
@@ -396,9 +234,7 @@ def parse_batch_upload_name(name: str) -> tuple[str, float | None]:
         batch = stem[: time_match.start()]
     else:
         batch = re.sub(r"[_-]?\d+.*$", "", stem)
-
-    batch = re.sub(r"[_\-\s]+$", "", batch).strip()
-    return batch or "Batch 1", time_h
+    return re.sub(r"[_\-\s]+$", "", batch).strip() or "Batch 1", time_h
 
 
 def analyze_batch_uploads(
@@ -410,12 +246,7 @@ def analyze_batch_uploads(
     for upload in uploads:
         batch, time_h = parse_batch_upload_name(upload.name)
         file_rows.append(
-            {
-                "batch": batch,
-                "filename": upload.name,
-                "parsed_time_h": time_h,
-                "image": Image.open(upload).convert("RGB"),
-            }
+            {"batch": batch, "filename": upload.name, "parsed_time_h": time_h, "image": Image.open(upload).convert("RGB")}
         )
 
     detail_records = []
@@ -459,9 +290,7 @@ def analyze_batch_uploads(
             }
         )
 
-    comparison = pd.DataFrame(comparison_records).sort_values(
-        ["vigor_score", "final_germination_rate"], ascending=False
-    )
+    comparison = pd.DataFrame(comparison_records).sort_values(["vigor_score", "final_germination_rate"], ascending=False)
     return comparison.reset_index(drop=True), details
 
 
@@ -476,7 +305,6 @@ def build_markdown_report(experiment_name: str, comparison: pd.DataFrame, detail
         f"- 检测模型：{'YOLO 训练检测器' if MODEL_PATH.exists() else 'OpenCV 规则基线'}",
         "",
     ]
-
     if not comparison.empty:
         best = comparison.iloc[0]
         lines.extend(
@@ -492,7 +320,6 @@ def build_markdown_report(experiment_name: str, comparison: pd.DataFrame, detail
                 "",
             ]
         )
-
     lines.extend(["## 时间点明细", "", details.to_markdown(index=False) if not details.empty else "无数据", ""])
     return "\n".join(lines)
 
@@ -509,7 +336,6 @@ def build_docx_report(experiment_name: str, comparison: pd.DataFrame, details: p
     document.add_paragraph(f"图像数量：{len(details)}")
     document.add_paragraph(f"批次数量：{comparison['batch'].nunique() if not comparison.empty else 0}")
     document.add_paragraph(f"检测模型：{'YOLO 训练检测器' if MODEL_PATH.exists() else 'OpenCV 规则基线'}")
-
     if not comparison.empty:
         best = comparison.iloc[0]
         document.add_heading("自动结论", level=2)
@@ -540,7 +366,6 @@ def build_docx_report(experiment_name: str, comparison: pd.DataFrame, details: p
 def build_report_package(experiment_name: str, comparison: pd.DataFrame, details: pd.DataFrame) -> bytes:
     markdown_report = build_markdown_report(experiment_name, comparison, details)
     docx_report = build_docx_report(experiment_name, comparison, details)
-
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("batch_comparison.csv", comparison.to_csv(index=False).encode("utf-8-sig"))
@@ -549,6 +374,248 @@ def build_report_package(experiment_name: str, comparison: pd.DataFrame, details
         if docx_report is not None:
             archive.writestr("experiment_report.docx", docx_report)
     return buffer.getvalue()
+
+
+def capture_usb_frame(camera_index: int) -> Image.Image:
+    cap = cv2.VideoCapture(int(camera_index), cv2.CAP_DSHOW)
+    if not cap.isOpened():
+        cap = cv2.VideoCapture(int(camera_index))
+    ok, frame = cap.read()
+    cap.release()
+    if not ok or frame is None:
+        raise RuntimeError(f"无法读取摄像头 {camera_index}，请检查设备编号或权限。")
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    return Image.fromarray(rgb)
+
+
+def append_capture_record(
+    image: Image.Image,
+    analyzer: Callable[[Image.Image], ImageAnalysis],
+    session_dir: Path,
+    frame_index: int,
+    start_time: float,
+) -> dict:
+    analysis = analyzer(image)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    image_name = f"frame_{frame_index:03d}_{timestamp}.jpg"
+    image_path = session_dir / image_name
+    image.save(image_path, quality=92)
+    return {
+        "frame": frame_index,
+        "time_h": round((time.time() - start_time) / 3600.0, 4),
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "image_path": str(image_path),
+        "total": analysis.total,
+        "germinated": analysis.germinated,
+        "non_germinated": analysis.non_germinated,
+        "germination_rate": round(analysis.germination_rate, 2),
+    }
+
+
+def render_timed_camera_page(analyzer: Callable[[Image.Image], ImageAnalysis]) -> None:
+    st.header("摄像头定时采集与自动趋势更新")
+    st.caption("连接普通 USB 摄像头后，系统可按设定间隔自动采集培养皿图像，并实时更新发芽率曲线和活力指标。")
+
+    if "timed_records" not in st.session_state:
+        st.session_state.timed_records = []
+
+    c1, c2, c3, c4 = st.columns(4)
+    session_name = c1.text_input("实验编号", value=f"session_{datetime.now().strftime('%Y%m%d')}")
+    camera_index = c2.number_input("摄像头编号", min_value=0, max_value=10, value=0, step=1)
+    interval_seconds = c3.number_input("采集间隔（秒）", min_value=2, max_value=3600, value=10, step=1)
+    frame_count = c4.number_input("采集张数", min_value=1, max_value=200, value=6, step=1)
+
+    b1, b2, b3 = st.columns([1, 1, 3])
+    start = b1.button("开始定时采集")
+    manual = b2.button("采集单帧")
+    if b3.button("清空当前监测记录"):
+        st.session_state.timed_records = []
+        st.rerun()
+
+    image_box = st.empty()
+    chart_box = st.empty()
+    table_box = st.empty()
+
+    if start or manual:
+        session_dir = CAPTURE_DIR / f"{session_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        session_dir.mkdir(parents=True, exist_ok=True)
+        start_time = time.time()
+        n_frames = 1 if manual else int(frame_count)
+        progress = st.progress(0.0)
+
+        for frame_index in range(1, n_frames + 1):
+            try:
+                image = capture_usb_frame(int(camera_index))
+            except Exception as exc:
+                st.error(str(exc))
+                break
+            record = append_capture_record(image, analyzer, session_dir, frame_index, start_time)
+            st.session_state.timed_records.append(record)
+            analysis = ImageAnalysis(
+                [
+                    Detection(0, 0, 1, 1, 1.0, 1.0, "germinated", 1.0)
+                    for _ in range(int(record["germinated"]))
+                ]
+                + [
+                    Detection(0, 0, 1, 1, 1.0, 1.0, "non_germinated", 1.0)
+                    for _ in range(int(record["non_germinated"]))
+                ]
+            )
+            image_box.image(image, caption=f"最新采集：{record['timestamp']} | 发芽率 {analysis.germination_rate:.1f}%", use_column_width=True)
+
+            df = pd.DataFrame(st.session_state.timed_records)
+            chart_box.line_chart(df.set_index("time_h")[["germination_rate"]])
+            table_box.dataframe(df, hide_index=True, use_container_width=True)
+            progress.progress(frame_index / n_frames)
+            if start and frame_index < n_frames:
+                time.sleep(float(interval_seconds))
+
+    if st.session_state.timed_records:
+        records = pd.DataFrame(st.session_state.timed_records)
+        st.subheader("实时趋势与活力指标")
+        render_vigor_summary(records)
+        csv = records.to_csv(index=False).encode("utf-8-sig")
+        st.download_button("下载定时采集记录 CSV", data=csv, file_name=f"{session_name}_camera_records.csv", mime="text/csv")
+    else:
+        st.info("尚无定时采集记录。固定摄像头视野后，点击“开始定时采集”即可。")
+
+
+def correction_frame_from_analysis(analysis: ImageAnalysis) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "include": True,
+                "x": int(det.x),
+                "y": int(det.y),
+                "w": int(det.w),
+                "h": int(det.h),
+                "label": det.label,
+                "confidence": round(float(det.confidence), 3),
+            }
+            for det in analysis.detections
+        ]
+    )
+
+
+def analysis_from_corrections(frame: pd.DataFrame) -> ImageAnalysis:
+    detections = []
+    for _, row in frame.iterrows():
+        if not bool(row.get("include", True)):
+            continue
+        w = max(1, int(row["w"]))
+        h = max(1, int(row["h"]))
+        detections.append(
+            Detection(
+                x=max(0, int(row["x"])),
+                y=max(0, int(row["y"])),
+                w=w,
+                h=h,
+                area=float(w * h),
+                aspect_ratio=float(max(w / max(1, h), h / max(1, w))),
+                label=str(row["label"]),
+                confidence=float(row.get("confidence", 1.0)),
+            )
+        )
+    return ImageAnalysis(detections=detections)
+
+
+def yolo_label_lines(frame: pd.DataFrame, width: int, height: int) -> list[str]:
+    lines = []
+    for _, row in frame.iterrows():
+        if not bool(row.get("include", True)):
+            continue
+        class_id = 1 if str(row["label"]) == "germinated" else 0
+        x = max(0.0, float(row["x"]))
+        y = max(0.0, float(row["y"]))
+        w = max(1.0, float(row["w"]))
+        h = max(1.0, float(row["h"]))
+        xc = min(1.0, max(0.0, (x + w / 2.0) / width))
+        yc = min(1.0, max(0.0, (y + h / 2.0) / height))
+        bw = min(1.0, max(0.0, w / width))
+        bh = min(1.0, max(0.0, h / height))
+        lines.append(f"{class_id} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
+    return lines
+
+
+def build_correction_package(image: Image.Image, image_name: str, edited: pd.DataFrame) -> bytes:
+    image_stem = Path(image_name).stem or "corrected_image"
+    corrected = edited.loc[edited["include"].astype(bool)].copy()
+    metadata = {
+        "image": image_name,
+        "width": image.width,
+        "height": image.height,
+        "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "classes": {"0": "non_germinated", "1": "germinated"},
+        "count": int(len(corrected)),
+    }
+
+    image_buffer = io.BytesIO()
+    image.save(image_buffer, format="JPEG", quality=92)
+    label_text = "\n".join(yolo_label_lines(corrected, image.width, image.height)) + "\n"
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(f"images/{image_stem}.jpg", image_buffer.getvalue())
+        archive.writestr(f"labels/{image_stem}.txt", label_text.encode("utf-8"))
+        archive.writestr("corrections.csv", edited.to_csv(index=False).encode("utf-8-sig"))
+        archive.writestr("metadata.json", json.dumps(metadata, ensure_ascii=False, indent=2).encode("utf-8"))
+    return buffer.getvalue()
+
+
+def render_correction_page(analyzer: Callable[[Image.Image], ImageAnalysis]) -> None:
+    st.header("人工校正与再训练数据导出")
+    st.caption("用户可修正误检、漏检和类别错误；系统会重新计算发芽率，并导出 YOLO 格式标签用于后续微调。")
+
+    uploaded = st.file_uploader("上传需要校正的培养皿图像", type=["jpg", "jpeg", "png", "bmp", "webp"], key="correction_upload")
+    if uploaded is None:
+        st.info("上传图像后，先由模型生成初始检测框，再在表格中修改 include、类别和框位置。")
+        return
+
+    image = Image.open(uploaded).convert("RGB")
+    analysis = analyzer(image)
+    annotated = annotate_detections(image, analysis.detections)
+
+    left, right = st.columns([1.15, 1])
+    with left:
+        st.image(annotated, caption="模型初始检测结果", use_column_width=True)
+    with right:
+        st.metric("模型检测种子数", analysis.total)
+        st.metric("模型发芽率", f"{analysis.germination_rate:.1f}%")
+
+    initial = correction_frame_from_analysis(analysis)
+    if initial.empty:
+        initial = pd.DataFrame(columns=["include", "x", "y", "w", "h", "label", "confidence"])
+
+    edited = st.data_editor(
+        initial,
+        hide_index=True,
+        use_container_width=True,
+        num_rows="dynamic",
+        column_config={
+            "include": st.column_config.CheckboxColumn("保留", default=True),
+            "label": st.column_config.SelectboxColumn("类别", options=["germinated", "non_germinated"]),
+            "confidence": st.column_config.NumberColumn("置信度", min_value=0.0, max_value=1.0, step=0.01),
+        },
+    )
+
+    corrected_analysis = analysis_from_corrections(edited)
+    st.subheader("校正后统计")
+    cols = st.columns(4)
+    cols[0].metric("校正后总数", corrected_analysis.total)
+    cols[1].metric("已发芽", corrected_analysis.germinated)
+    cols[2].metric("未发芽", corrected_analysis.non_germinated)
+    cols[3].metric("发芽率", f"{corrected_analysis.germination_rate:.1f}%")
+
+    corrected_image = annotate_detections(image, corrected_analysis.detections)
+    st.image(corrected_image, caption="校正后结果预览", use_column_width=True)
+
+    package = build_correction_package(image, uploaded.name, edited)
+    st.download_button(
+        "导出再训练数据包（图像 + YOLO 标签 + 校正表）",
+        data=package,
+        file_name=f"{Path(uploaded.name).stem}_correction_dataset.zip",
+        mime="application/zip",
+    )
 
 
 def render_batch_comparison_page(analyzer: Callable[[Image.Image], ImageAnalysis], interval_hours: float) -> None:
@@ -672,10 +739,7 @@ def render_model_results() -> None:
 
 
 model_status = "已接入训练权重" if MODEL_PATH.exists() else "未发现训练权重"
-
-detector_options = []
-if MODEL_PATH.exists():
-    detector_options.append("YOLO 训练检测器")
+detector_options = ["YOLO 训练检测器"] if MODEL_PATH.exists() else []
 detector_options.append("OpenCV 规则基线")
 
 with st.sidebar:
@@ -726,7 +790,16 @@ with st.sidebar:
     st.subheader("输入模式")
     mode = st.radio(
         "分析模式",
-        ["内置时序示例", "上传单张图像", "本机摄像头拍照", "上传时序图像", "多批次对比与报告", "训练评估结果"],
+        [
+            "内置时序示例",
+            "上传单张图像",
+            "本机摄像头拍照",
+            "摄像头定时监测",
+            "上传时序图像",
+            "多批次对比与报告",
+            "人工校正与数据闭环",
+            "训练评估结果",
+        ],
     )
     interval_hours = st.number_input("时序拍摄间隔（小时）", min_value=0.5, max_value=24.0, value=6.0, step=0.5)
 
@@ -739,7 +812,6 @@ if mode == "内置时序示例":
         st.warning("尚未生成内置示例。请先运行 `python scripts/make_sample_sequence.py`。")
     else:
         rows = load_sample_metadata(SAMPLE_META)
-
         st.header("时序培养皿图像")
         selected = st.select_slider(
             "选择时间点",
@@ -748,10 +820,8 @@ if mode == "内置时序示例":
         )
         image = Image.open(rows[selected]["path"]).convert("RGB")
         show_single_image_analysis(image, f"示例时间点：{rows[selected]['time_h']} h", analyzer)
-
         st.header("发芽曲线与活力评估")
-        summary = build_summary_table(rows, analyzer=analyzer)
-        render_vigor_summary(summary)
+        render_vigor_summary(build_summary_table(rows, analyzer=analyzer))
 
 elif mode == "上传单张图像":
     st.header("上传单张培养皿图像")
@@ -759,8 +829,7 @@ elif mode == "上传单张图像":
     if uploaded is None:
         st.info("上传后系统会运行检测模型，并统计已发芽与未发芽种子数量。")
     else:
-        image = Image.open(uploaded).convert("RGB")
-        show_single_image_analysis(image, uploaded.name, analyzer)
+        show_single_image_analysis(Image.open(uploaded).convert("RGB"), uploaded.name, analyzer)
 
 elif mode == "本机摄像头拍照":
     st.header("本机摄像头拍照")
@@ -768,8 +837,10 @@ elif mode == "本机摄像头拍照":
     if shot is None:
         st.info("拍照后系统会直接调用当前检测器统计发芽率。")
     else:
-        image = Image.open(shot).convert("RGB")
-        show_single_image_analysis(image, "摄像头拍照图像", analyzer)
+        show_single_image_analysis(Image.open(shot).convert("RGB"), "摄像头拍照图像", analyzer)
+
+elif mode == "摄像头定时监测":
+    render_timed_camera_page(analyzer)
 
 elif mode == "上传时序图像":
     st.header("上传一组培养皿时序图像")
@@ -796,12 +867,14 @@ elif mode == "上传时序图像":
                         "germination_rate": round(result.germination_rate, 2),
                     }
                 )
-
         st.header("时序统计")
         render_vigor_summary(pd.DataFrame(summary_records))
 
 elif mode == "多批次对比与报告":
     render_batch_comparison_page(analyzer, interval_hours)
+
+elif mode == "人工校正与数据闭环":
+    render_correction_page(analyzer)
 
 elif mode == "训练评估结果":
     render_model_results()
